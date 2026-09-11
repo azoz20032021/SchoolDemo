@@ -193,7 +193,9 @@ export function buildWorld(): World {
     const guardians: Row[] = [];
     // One parent per student, except two families that have a second child here.
     students.forEach((student, i) => {
-        if (i > 0 && i % 17 === 0) {
+        // The first family has two children here, so the demo parent the
+        // sign-in page lands on can switch between them.
+        if (i === 1 || (i > 0 && i % 17 === 0)) {
             // Attach this child to the previous parent instead: a family of two.
             const previous = guardians[guardians.length - 1];
             previous.student_ids.push(student.id);
@@ -469,7 +471,7 @@ export function buildWorld(): World {
             return_time: '13:40',
             stops: ['Al-Andalus square', 'Palestine street', 'Zayouna'],
             status: 'on_route',
-            status_text: 'في الطريق',
+            status_text: 'On the way',
         },
         {
             id: 'b2',
@@ -481,7 +483,7 @@ export function buildWorld(): World {
             return_time: '13:45',
             stops: ['Al-Mansour', 'Yarmouk', 'Al-Jamia'],
             status: 'at_school',
-            status_text: 'وصل المدرسة',
+            status_text: 'Arrived at school',
         },
     ];
 

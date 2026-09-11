@@ -121,11 +121,20 @@ export const DashboardHeader: React.FC<DashboardHeaderProps> = ({ user }) => {
 
     return (
         <header className="sticky top-0 z-[100] print:hidden">
-            <div className="relative overflow-hidden bg-brand-900 text-white rounded-b-[1.75rem] lg:rounded-none lg:border-b lg:border-white/10 shadow-[0_10px_30px_-14px_rgba(7,21,83,0.8)] lg:shadow-none">
-                {/* The crest's blue, lit rather than flat. */}
-                <div className="absolute -left-16 -top-20 w-56 h-56 bg-brand-500/50 rounded-full blur-3xl" />
-                <div className="absolute right-1/4 -top-24 w-52 h-52 bg-brand-400/30 rounded-full blur-3xl" />
-                <div className="absolute -right-10 -bottom-16 w-44 h-44 bg-gold-500/20 rounded-full blur-3xl" />
+            <div className="relative bg-brand-900 text-white rounded-b-[1.75rem] lg:rounded-none lg:border-b lg:border-white/10 shadow-[0_10px_30px_-14px_rgba(7,21,83,0.8)] lg:shadow-none">
+                {/*
+                  * The crest's blue, lit rather than flat.
+                  *
+                  * These have to be cut off at the bar's edges, so they get a
+                  * clipping layer of their own. The bar itself must not clip,
+                  * or it swallows the notifications panel that hangs below the
+                  * bell — which is exactly what it did.
+                  */}
+                <div className="absolute inset-0 overflow-hidden rounded-b-[1.75rem] lg:rounded-none pointer-events-none">
+                    <div className="absolute -left-16 -top-20 w-56 h-56 bg-brand-500/50 rounded-full blur-3xl" />
+                    <div className="absolute right-1/4 -top-24 w-52 h-52 bg-brand-400/30 rounded-full blur-3xl" />
+                    <div className="absolute -right-10 -bottom-16 w-44 h-44 bg-gold-500/20 rounded-full blur-3xl" />
+                </div>
 
                 <div className="relative px-4 md:px-6 py-3 flex items-center justify-between gap-3 max-w-3xl lg:max-w-5xl mx-auto">
                     <div className="flex items-center gap-3 min-w-0">
