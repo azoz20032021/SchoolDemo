@@ -1,0 +1,789 @@
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import {
+    Banknote, BellRing, CircleDollarSign, FileText, Phone, Plus, Receipt, RefreshCw, Search,
+    TrendingUp, Wallet,
+} from 'lucide-react';
+import { ClassData, Invoice, Payment, StudentFinanceRow } from '../../types';
+import { api, ApiError, formatMoney } from '../../lib/api';
+import { isAdmin, useAuth } from '../../context/AuthContext';
+import {
+    Badge, Card, EmptyState, ErrorBanner, Modal, SectionTitle, Spinner, StatCard, inputClass, labelClass,
+} from '../../components/ui';
+import { StudentPicker } from '../../components/StudentPicker';
+import { t } from '../../i18n';
+
+/**
+ * The student rows are fetched a page at a time. The screen used to load every
+ * student in the school and paint all of them, which is fine at twenty students
+ * and painful at several hundred.
+ */
+const STUDENT_PAGE_SIZE = 20;
+
+const CATEGORIES = ['قسط دراسي', 'رسوم تسجيل', 'كتب وقرطاسية', 'نقل مدرسي', 'زي مدرسي', 'نشاطات', 'أخرى'];
+const METHODS = ['نقدي', 'تحويل بنكي', 'محفظة إلكترونية', 'شيك'];
+
+/** How the school splits the year when it bills. Free text before this. */
+const TERMS = ['القسط الأول', 'القسط الثاني', 'الفصل الأول', 'الفصل الثاني'];
+
+const STATUS_VIEW: Record<string, { tone: 'emerald' | 'amber' | 'rose' | 'slate'; label: string }> = {
+    paid: { tone: 'emerald', label: 'مسدد بالكامل' },
+    partial: { tone: 'amber', label: 'مسدد جزئياً' },
+    unpaid: { tone: 'rose', label: 'غير مسدد' },
+    cancelled: { tone: 'slate', label: 'ملغى' },
+};
+
+interface Overview {
+    total_billed: number;
+    total_collected: number;
+    outstanding: number;
+    invoice_count: number;
+    paid_invoices: number;
+    overdue_invoices: number;
+    students_with_dues: number;
+    collection_rate: number;
+}
+
+export const Finance: React.FC = () => {
+    const { user } = useAuth();
+    const canDelete = isAdmin(user?.role);
+
+    const [tab, setTab] = useState<'students' | 'invoices'>('students');
+    const [overview, setOverview] = useState<Overview | null>(null);
+    const [students, setStudents] = useState<StudentFinanceRow[]>([]);
+    const [studentsTotal, setStudentsTotal] = useState(0);
+    const [studentsNextCursor, setStudentsNextCursor] = useState<string | null>(null);
+    const [loadingMoreStudents, setLoadingMoreStudents] = useState(false);
+    const [listTotals, setListTotals] = useState<{ outstanding: number; debtors: number } | null>(null);
+    const [invoices, setInvoices] = useState<Invoice[]>([]);
+    const [invoicesNextCursor, setInvoicesNextCursor] = useState<string | null>(null);
+    const [loadingMoreInvoices, setLoadingMoreInvoices] = useState(false);
+    const [classes, setClasses] = useState<ClassData[]>([]);
+    const [loading, setLoading] = useState(true);
+    const [error, setError] = useState('');
+
+    const [search, setSearch] = useState('');
+    const [classFilter, setClassFilter] = useState('');
+    const [onlyDebtors, setOnlyDebtors] = useState(false);
+
+    const [showIssue, setShowIssue] = useState(false);
+    const [issueForm, setIssueForm] = useState({
+        target: 'class' as 'student' | 'class' | 'all',
+        student_id: '',
+        class_id: '',
+        title: 'القسط الدراسي',
+        category: 'قسط دراسي',
+        amount: '',
+        discount: '',
+        due_date: '',
+        term: '',
+    });
+
+    const [payingInvoice, setPayingInvoice] = useState<Invoice | null>(null);
+    const [payForm, setPayForm] = useState({ amount: '', method: 'نقدي', paid_at: '', note: '' });
+    const [invoicePayments, setInvoicePayments] = useState<Payment[]>([]);
+    const [busy, setBusy] = useState(false);
+
+    /** The filters live in the query string, so the server does the work. */
+    const studentsUrl = useCallback((offset?: string | null) => {
+        const params = new URLSearchParams({ limit: String(STUDENT_PAGE_SIZE) });
+        if (offset) params.set('after', offset);
+        if (search.trim()) params.set('search', search.trim());
+        if (classFilter) params.set('class_id', classFilter);
+        if (onlyDebtors) params.set('only_debtors', '1');
+        return `/api/admin/finance/students?${params}`;
+    }, [search, classFilter, onlyDebtors]);
+
+    const invoicesUrl = useCallback((offset?: string | null) => {
+        const params = new URLSearchParams({ limit: String(STUDENT_PAGE_SIZE) });
+        if (offset) params.set('after', offset);
+        if (classFilter) params.set('class_id', classFilter);
+        return `/api/admin/invoices?${params}`;
+    }, [classFilter]);
+
+    const loadInvoices = useCallback(async () => {
+        const res = await api.get<{ data: Invoice[]; nextCursor: string | null }>(invoicesUrl());
+        setInvoices(res.data || []);
+        setInvoicesNextCursor(res.nextCursor || null);
+    }, [invoicesUrl]);
+
+    const loadStudents = useCallback(async () => {
+        const res = await api.get<{
+            students: StudentFinanceRow[];
+            total: number;
+            nextCursor: string | null;
+            totals: { outstanding: number; debtors: number };
+        }>(studentsUrl());
+        setStudents(res.students || []);
+        setStudentsTotal(res.total || 0);
+        setStudentsNextCursor(res.nextCursor || null);
+        setListTotals(res.totals || null);
+    }, [studentsUrl]);
+
+    /**
+     * A full refresh of the screen. Deliberately a plain function rather than a
+     * memoised one: it has to reload the student and invoice lists with the
+     * filters that are active *now*, and a callback frozen with an empty
+     * dependency list would quietly refetch using whatever the filters were
+     * when the page first mounted.
+     */
+    const load = async () => {
+        setLoading(true);
+        setError('');
+        try {
+            const [ov, cls] = await Promise.all([
+                api.get<Overview>('/api/admin/finance/summary'),
+                api.get<ClassData[]>('/api/classes'),
+                loadInvoices(),
+                loadStudents(),
+            ]);
+            setOverview(ov);
+            setClasses(cls);
+        } catch (err) {
+            setError(err instanceof ApiError ? err.message : t('تعذر تحميل البيانات المالية'));
+        } finally {
+            setLoading(false);
+        }
+    };
+
+    const loadMoreStudents = async () => {
+        if (!studentsNextCursor || loadingMoreStudents) return;
+        setLoadingMoreStudents(true);
+        try {
+            const res = await api.get<{ students: StudentFinanceRow[]; nextCursor: string | null }>(
+                studentsUrl(studentsNextCursor)
+            );
+            setStudents((prev) => [...prev, ...(res.students || [])]);
+            setStudentsNextCursor(res.nextCursor || null);
+        } catch {
+            /* ignore */
+        } finally {
+            setLoadingMoreStudents(false);
+        }
+    };
+
+    const loadMoreInvoices = async () => {
+        if (!invoicesNextCursor || loadingMoreInvoices) return;
+        setLoadingMoreInvoices(true);
+        try {
+            const res = await api.get<{ data: Invoice[]; nextCursor: string | null }>(invoicesUrl(invoicesNextCursor));
+            setInvoices((prev) => [...prev, ...(res.data || [])]);
+            setInvoicesNextCursor(res.nextCursor || null);
+        } catch {
+            /* ignore */
+        } finally {
+            setLoadingMoreInvoices(false);
+        }
+    };
+
+    // Only on mount; every later refresh comes from an action or a filter.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    useEffect(() => { load(); }, []);
+
+    /**
+     * Whenever a filter settles, ask the server for a fresh first page. The
+     * delay keeps a fast typist from firing one request per keystroke.
+     */
+    const firstRender = useRef(true);
+    useEffect(() => {
+        if (firstRender.current) {
+            firstRender.current = false;
+            return; // the initial page already came from load()
+        }
+        const timer = setTimeout(() => { loadStudents().catch(() => {}); }, 300);
+        return () => clearTimeout(timer);
+    }, [loadStudents]);
+
+    // The invoice list only cares about the class, so it reloads on that alone.
+    // Its own guard: the students effect above has already flipped its flag by
+    // the time this one runs on the first render.
+    const firstInvoiceRender = useRef(true);
+    useEffect(() => {
+        if (firstInvoiceRender.current) {
+            firstInvoiceRender.current = false;
+            return;
+        }
+        loadInvoices().catch(() => {});
+    }, [loadInvoices]);
+
+    const visibleInvoices = useMemo(() => {
+        const term = search.trim();
+        return invoices.filter((i) => {
+            if (classFilter && i.class_id !== classFilter) return false;
+            if (onlyDebtors && (i.remaining ?? 0) <= 0) return false;
+            if (!term) return true;
+            return i.student_name?.includes(term) || i.student_uid?.includes(term) || i.title.includes(term);
+        });
+    }, [invoices, search, classFilter, onlyDebtors]);
+
+    const issueInvoice = async (e: React.FormEvent) => {
+        e.preventDefault();
+        if (issueForm.target === 'student' && !issueForm.student_id) {
+            setError(t('يرجى اختيار الطالب'));
+            return;
+        }
+        setBusy(true);
+        setError('');
+        try {
+            const res = await api.post<{ count: number }>('/api/admin/invoices', {
+                ...issueForm,
+                amount: Number(issueForm.amount),
+                discount: issueForm.discount ? Number(issueForm.discount) : 0,
+                due_date: issueForm.due_date || undefined,
+                term: issueForm.term || undefined,
+            });
+            setShowIssue(false);
+            setIssueForm((f) => ({ ...f, amount: '', discount: '', due_date: '' }));
+            await load();
+            alert(t('تم إصدار الرسوم لعدد {count} طالب', { count: res.count }));
+        } catch (err) {
+            setError(err instanceof ApiError ? err.message : t('تعذر إصدار الرسوم'));
+        } finally {
+            setBusy(false);
+        }
+    };
+
+    const openPayment = async (invoice: Invoice) => {
+        setPayingInvoice(invoice);
+        setPayForm({ amount: String(invoice.remaining ?? 0), method: 'نقدي', paid_at: '', note: '' });
+        setInvoicePayments([]);
+        setError('');
+        try {
+            setInvoicePayments(await api.get<Payment[]>(`/api/admin/invoices/${invoice.id}/payments`));
+        } catch { /* the history is supplementary; the form still works */ }
+    };
+
+    const recordPayment = async (e: React.FormEvent) => {
+        e.preventDefault();
+        if (!payingInvoice) return;
+        setBusy(true);
+        setError('');
+        try {
+            await api.post(`/api/admin/invoices/${payingInvoice.id}/payments`, {
+                amount: Number(payForm.amount),
+                method: payForm.method,
+                paid_at: payForm.paid_at || undefined,
+                note: payForm.note || undefined,
+            });
+            setPayingInvoice(null);
+            await load();
+        } catch (err) {
+            setError(err instanceof ApiError ? err.message : t('تعذر تسجيل الدفعة'));
+        } finally {
+            setBusy(false);
+        }
+    };
+
+    /**
+     * Recompute every student's stored fee totals from the invoices. Needed
+     * once for accounts that predate those fields, and afterwards only if the
+     * figures are ever suspected of drifting.
+     */
+    const rebuildTotals = async () => {
+        if (!confirm(t('سيعاد احتساب المجاميع المالية لكل الطلاب من السندات. متابعة؟'))) return;
+        setBusy(true);
+        setError('');
+        try {
+            const res = await api.post<{ students: number }>('/api/admin/finance/rebuild-totals');
+            await load();
+            alert(t('تم تحديث المجاميع المالية لـ {count} طالب', { count: res.students }));
+        } catch (err) {
+            setError(err instanceof ApiError ? err.message : t('تعذر تحديث المجاميع'));
+        } finally {
+            setBusy(false);
+        }
+    };
+
+    /**
+     * The reminders also go out on their own roughly hourly; this is for the
+     * accountant who wants them sent now. Sending twice changes nothing.
+     */
+    const sendReminders = async () => {
+        setBusy(true);
+        setError('');
+        try {
+            const res = await api.post<{ sent: number }>('/api/admin/finance/reminders');
+            alert(t('تم إرسال {count} تذكير', { count: res.sent }));
+        } catch (err) {
+            setError(err instanceof ApiError ? err.message : t('تعذر إرسال التذكيرات'));
+        } finally {
+            setBusy(false);
+        }
+    };
+
+    const reversePayment = async (paymentId: string) => {
+        if (!confirm(t('هل أنت متأكد من إرجاع هذه الدفعة؟ سيتم تعديل رصيد السند.'))) return;
+        try {
+            await api.del(`/api/admin/payments/${paymentId}`);
+            if (payingInvoice) await openPayment(payingInvoice);
+            await load();
+        } catch (err) {
+            setError(err instanceof ApiError ? err.message : t('تعذر إرجاع الدفعة'));
+        }
+    };
+
+    if (loading) return <div className="p-6"><Spinner label={t('جاري تحميل البيانات المالية')} /></div>;
+
+    return (
+        <div className="p-4 md:p-6 space-y-4">
+            <div className="flex flex-wrap items-start justify-between gap-3">
+                <div className="min-w-0 flex-1">
+                    <h2 className="text-xl font-black text-slate-900 tracking-tight">{t('الإدارة المالية')}</h2>
+                    <p className="text-xs text-slate-400 font-medium mt-0.5">{t('الأقساط والرسوم وحالة السداد لكل طالب')}</p>
+                </div>
+                <div className="flex flex-wrap items-center gap-2 w-full sm:w-auto">
+                    <button
+                        onClick={sendReminders}
+                        disabled={busy}
+                        className="flex-1 sm:flex-none justify-center bg-white border border-slate-200 text-slate-600 px-3 py-2.5 rounded-xl text-xs font-black flex items-center gap-1.5 hover:bg-slate-50 disabled:opacity-60"
+                        title={t('يرسل تذكيراً لكل طالب اقترب موعد قسطه أو تأخر عنه')}
+                    >
+                        <BellRing className="w-4 h-4" />
+                        {t('تذكير بالأقساط')}
+                    </button>
+                    {canDelete && (
+                        <button
+                            onClick={rebuildTotals}
+                            disabled={busy}
+                            className="flex-1 sm:flex-none justify-center bg-white border border-slate-200 text-slate-600 px-3 py-2.5 rounded-xl text-xs font-black flex items-center gap-1.5 hover:bg-slate-50 disabled:opacity-60"
+                            title={t('يعيد احتساب مجاميع كل طالب من سنداته — نفّذه مرة واحدة بعد التحديث')}
+                        >
+                            <RefreshCw className="w-4 h-4" />
+                            {t('تحديث المجاميع')}
+                        </button>
+                    )}
+                    <button
+                        onClick={() => setShowIssue(true)}
+                        className="flex-1 sm:flex-none justify-center bg-gradient-to-l from-brand-700 to-brand-500 text-white px-4 py-2.5 rounded-xl text-xs font-black shadow-lg shadow-brand-700/30 active:scale-[0.98] transition-transform flex items-center gap-1.5"
+                    >
+                        <Plus className="w-4 h-4" />
+                        {t('إصدار رسوم')}
+                    </button>
+                </div>
+            </div>
+
+            {error && <ErrorBanner message={error} onDismiss={() => setError('')} />}
+
+            {overview && (
+                <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+                    <StatCard
+                        label={t('إجمالي المستحق')}
+                        value={formatMoney(overview.total_billed)}
+                        tone="indigo"
+                        icon={<FileText className="w-4 h-4 opacity-50" />}
+                        hint={`${overview.invoice_count} سند`}
+                    />
+                    <StatCard
+                        label={t('المحصّل')}
+                        value={formatMoney(overview.total_collected)}
+                        tone="emerald"
+                        icon={<TrendingUp className="w-4 h-4 opacity-50" />}
+                        hint={`نسبة التحصيل ${overview.collection_rate}%`}
+                    />
+                    <StatCard
+                        label={t('المتبقي')}
+                        value={formatMoney(overview.outstanding)}
+                        tone="rose"
+                        icon={<Wallet className="w-4 h-4 opacity-50" />}
+                        hint={`${overview.students_with_dues} طالب عليه مستحقات`}
+                    />
+                    <StatCard
+                        label={t('سندات متأخرة')}
+                        value={overview.overdue_invoices}
+                        tone="amber"
+                        icon={<CircleDollarSign className="w-4 h-4 opacity-50" />}
+                        hint={t('تجاوزت تاريخ الاستحقاق')}
+                    />
+                </div>
+            )}
+
+            <Card className="p-3 space-y-3">
+                <div className="flex gap-2">
+                    <button
+                        onClick={() => setTab('students')}
+                        className={`flex-1 py-2 rounded-xl text-xs font-black transition-colors ${
+                            tab === 'students' ? 'bg-brand-700 text-white' : 'bg-slate-50 text-slate-500'
+                        }`}
+                    >
+                        {t('حالة الطلاب')}
+                    </button>
+                    <button
+                        onClick={() => setTab('invoices')}
+                        className={`flex-1 py-2 rounded-xl text-xs font-black transition-colors ${
+                            tab === 'invoices' ? 'bg-brand-700 text-white' : 'bg-slate-50 text-slate-500'
+                        }`}
+                    >
+                        {t('السندات')}
+                    </button>
+                </div>
+
+                <div className="flex flex-col md:flex-row gap-2">
+                    <div className="relative flex-1">
+                        <Search className="w-4 h-4 text-slate-400 absolute top-1/2 -translate-y-1/2 right-3.5" />
+                        <input
+                            value={search}
+                            onChange={(e) => setSearch(e.target.value)}
+                            className={`${inputClass} pr-10`}
+                            placeholder={t('ابحث بالاسم أو الرقم التعريفي')}
+                        />
+                    </div>
+                    <select className={`${inputClass} md:w-52`} value={classFilter} onChange={(e) => setClassFilter(e.target.value)}>
+                        <option value="">{t('كل الصفوف')}</option>
+                        {classes.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+                    </select>
+                    <button
+                        onClick={() => setOnlyDebtors((v) => !v)}
+                        className={`px-4 py-2.5 rounded-xl text-xs font-black whitespace-nowrap border transition-colors ${
+                            onlyDebtors ? 'bg-rose-50 border-rose-200 text-rose-600' : 'bg-white border-slate-200 text-slate-500'
+                        }`}
+                    >
+                        {t('المتبقي عليهم فقط')}
+                    </button>
+                </div>
+            </Card>
+
+            {tab === 'students' ? (
+                <Card>
+                    <div className="px-4 pt-4 flex items-center justify-between gap-3">
+                        <p className="text-[11px] font-bold text-slate-400">
+                            {t('يعرض {shown} من {total} طالب', { shown: students.length, total: studentsTotal })}
+                        </p>
+                        {listTotals && listTotals.outstanding > 0 && (
+                            <p className="text-[11px] font-black text-rose-600">
+                                {t('متبقٍ على القائمة')} {formatMoney(listTotals.outstanding)}
+                            </p>
+                        )}
+                    </div>
+                    {students.length === 0 ? (
+                        <EmptyState message={t('لا يوجد طلاب مطابقون للبحث')} />
+                    ) : (
+                        <div className="divide-y divide-slate-50">
+                            {students.map((s) => (
+                                <div key={s.student_id} className="p-4 flex items-center gap-3">
+                                    <div
+                                        className={`w-11 h-11 rounded-2xl flex items-center justify-center shrink-0 ${
+                                            s.is_clear ? 'bg-emerald-50 text-emerald-600' : 'bg-rose-50 text-rose-600'
+                                        }`}
+                                    >
+                                        <Banknote className="w-5 h-5" />
+                                    </div>
+                                    <div className="flex-1 min-w-0">
+                                        <div className="flex items-center gap-2 flex-wrap">
+                                            <p className="font-black text-slate-800 text-sm truncate">{s.name}</p>
+                                            <Badge tone={s.is_clear ? 'emerald' : s.is_overdue ? 'rose' : 'amber'}>
+                                                {t(s.payment_status)}
+                                            </Badge>
+                                        </div>
+                                        <p className="text-[11px] text-slate-400 font-medium mt-0.5">
+                                            {s.uid} · {s.class_name}
+                                        </p>
+                                    </div>
+                                    <div className="text-left shrink-0">
+                                        <p className={`text-sm font-black ${s.is_clear ? 'text-emerald-600' : 'text-rose-600'}`}>
+                                            {formatMoney(s.outstanding)}
+                                        </p>
+                                        <p className="text-[10px] text-slate-400 font-bold">
+                                            من {formatMoney(s.total_billed)}
+                                        </p>
+                                        {s.guardian_phone && (
+                                            <a
+                                                href={`tel:${s.guardian_phone}`}
+                                                className="text-[10px] text-brand-600 font-bold inline-flex items-center gap-1 mt-1"
+                                                dir="ltr"
+                                            >
+                                                <Phone className="w-3 h-3" />
+                                                {s.guardian_phone}
+                                            </a>
+                                        )}
+                                    </div>
+                                </div>
+                            ))}
+                        </div>
+                    )}
+                    {studentsNextCursor && (
+                        <div className="p-4 border-t border-slate-50 text-center">
+                            <button
+                                onClick={loadMoreStudents}
+                                disabled={loadingMoreStudents}
+                                className="px-5 py-2.5 bg-brand-50 hover:bg-brand-100 text-brand-700 rounded-xl text-xs font-black transition-all disabled:opacity-50"
+                            >
+                                {loadingMoreStudents ? t('جاري التحميل...') : t('تحميل المزيد')}
+                            </button>
+                        </div>
+                    )}
+                </Card>
+            ) : (
+                <Card>
+                    {visibleInvoices.length === 0 ? (
+                        <EmptyState message={t('لا توجد سندات مطابقة')} hint={t('أصدر رسوماً جديدة من الزر بالأعلى')} />
+                    ) : (
+                        <div className="divide-y divide-slate-50">
+                            {visibleInvoices.map((inv) => {
+                                const view = STATUS_VIEW[inv.status] || STATUS_VIEW.unpaid;
+                                return (
+                                    <div key={inv.id} className="p-4 flex items-center gap-3">
+                                        <div className="w-11 h-11 bg-slate-50 text-slate-500 rounded-2xl flex items-center justify-center shrink-0">
+                                            <Receipt className="w-5 h-5" />
+                                        </div>
+                                        <div className="flex-1 min-w-0">
+                                            <div className="flex items-center gap-2 flex-wrap">
+                                                <p className="font-black text-slate-800 text-sm truncate">{inv.title}</p>
+                                                <Badge tone={view.tone}>{t(view.label)}</Badge>
+                                            </div>
+                                            <p className="text-[11px] text-slate-400 font-medium mt-0.5 truncate">
+                                                {inv.student_name} · {inv.student_uid}
+                                                {inv.due_date && ` · استحقاق ${inv.due_date}`}
+                                            </p>
+                                        </div>
+                                        <div className="text-left shrink-0">
+                                            <p className="text-sm font-black text-slate-800">{formatMoney(inv.net_amount ?? inv.amount)}</p>
+                                            <p className="text-[10px] text-rose-500 font-bold">متبقي {formatMoney(inv.remaining)}</p>
+                                        </div>
+                                        {inv.status !== 'paid' && inv.status !== 'cancelled' && (
+                                            <button
+                                                onClick={() => openPayment(inv)}
+                                                className="bg-emerald-600 text-white text-[11px] font-black px-3 py-2 rounded-xl shrink-0"
+                                            >
+                                                {t('تسديد')}
+                                            </button>
+                                        )}
+                                    </div>
+                                );
+                            })}
+                        </div>
+                    )}
+                    {tab === 'invoices' && invoicesNextCursor && (
+                        <div className="p-4 border-t border-slate-50 text-center">
+                            <button
+                                onClick={loadMoreInvoices}
+                                disabled={loadingMoreInvoices}
+                                className="px-5 py-2.5 bg-brand-50 hover:bg-brand-100 text-brand-700 rounded-xl text-xs font-black transition-all disabled:opacity-50"
+                            >
+                                {loadingMoreInvoices ? t('جاري التحميل...') : t('تحميل المزيد')}
+                            </button>
+                        </div>
+                    )}
+                </Card>
+            )}
+
+            {/* Issue fees */}
+            <Modal open={showIssue} onClose={() => setShowIssue(false)} title={t('إصدار رسوم')} subtitle={t('لطالب واحد أو صف كامل أو جميع الطلاب')}>
+                <form onSubmit={issueInvoice} className="space-y-3">
+                    <div>
+                        <label className={labelClass}>{t('الفئة المستهدفة')}</label>
+                        <div className="grid grid-cols-3 gap-2">
+                            {([
+                                { key: 'student', label: 'طالب' },
+                                { key: 'class', label: 'صف كامل' },
+                                { key: 'all', label: 'كل الطلاب' },
+                            ] as const).map(({ key, label }) => (
+                                <button
+                                    key={key}
+                                    type="button"
+                                    onClick={() => setIssueForm((f) => ({ ...f, target: key }))}
+                                    className={`py-2.5 rounded-xl text-xs font-black border transition-colors ${
+                                        issueForm.target === key
+                                            ? 'bg-brand-700 text-white border-brand-700'
+                                            : 'bg-white text-slate-500 border-slate-200'
+                                    }`}
+                                >
+                                    {label}
+                                </button>
+                            ))}
+                        </div>
+                    </div>
+
+                    {issueForm.target === 'student' && (
+                        <StudentPicker
+                            label={t('الطالب')}
+                            required
+                            value={issueForm.student_id}
+                            onChange={(id) => setIssueForm((f) => ({ ...f, student_id: id }))}
+                        />
+                    )}
+
+                    {issueForm.target === 'class' && (
+                        <div>
+                            <label className={labelClass}>{t('الصف')} <span className="text-red-500">*</span></label>
+                            <select
+                                className={inputClass}
+                                value={issueForm.class_id}
+                                onChange={(e) => setIssueForm((f) => ({ ...f, class_id: e.target.value }))}
+                                required
+                            >
+                                <option value="">{t('-- اختر الصف --')}</option>
+                                {classes.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+                            </select>
+                        </div>
+                    )}
+
+                    <div className="grid grid-cols-2 gap-3">
+                        <div>
+                            <label className={labelClass}>{t('العنوان')} <span className="text-red-500">*</span></label>
+                            <input
+                                className={inputClass}
+                                value={issueForm.title}
+                                onChange={(e) => setIssueForm((f) => ({ ...f, title: e.target.value }))}
+                                required
+                            />
+                        </div>
+                        <div>
+                            <label className={labelClass}>{t('النوع')}</label>
+                            <select
+                                className={inputClass}
+                                value={issueForm.category}
+                                onChange={(e) => setIssueForm((f) => ({ ...f, category: e.target.value }))}
+                            >
+                                {CATEGORIES.map((c) => <option key={c} value={c}>{c}</option>)}
+                            </select>
+                        </div>
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-3">
+                        <div>
+                            <label className={labelClass}>{t('المبلغ (د.ع)')} <span className="text-red-500">*</span></label>
+                            <input
+                                type="number" min={1} className={inputClass} value={issueForm.amount}
+                                onChange={(e) => setIssueForm((f) => ({ ...f, amount: e.target.value }))}
+                                placeholder="750000" required
+                            />
+                        </div>
+                        <div>
+                            <label className={labelClass}>{t('الخصم (اختياري)')}</label>
+                            <input
+                                type="number" min={0} className={inputClass} value={issueForm.discount}
+                                onChange={(e) => setIssueForm((f) => ({ ...f, discount: e.target.value }))}
+                            />
+                        </div>
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-3">
+                        <div>
+                            <label className={labelClass}>{t('تاريخ الاستحقاق')}</label>
+                            <input
+                                type="date" className={inputClass} value={issueForm.due_date}
+                                onChange={(e) => setIssueForm((f) => ({ ...f, due_date: e.target.value }))}
+                            />
+                        </div>
+                        <div>
+                            <label className={labelClass}>{t('القسط / الفصل')}</label>
+                            <select
+                                className={inputClass} value={issueForm.term}
+                                onChange={(e) => setIssueForm((f) => ({ ...f, term: e.target.value }))}
+                            >
+                                <option value="">{t('غير محدد')}</option>
+                                {TERMS.map((term) => <option key={term} value={term}>{t(term)}</option>)}
+                            </select>
+                        </div>
+                    </div>
+
+                    <button
+                        type="submit"
+                        disabled={busy}
+                        className="w-full bg-gradient-to-l from-brand-700 to-brand-500 text-white py-3.5 rounded-xl font-black text-sm shadow-lg shadow-brand-700/30 active:scale-[0.99] transition-transform disabled:opacity-60"
+                    >
+                        {busy ? t('جاري الإصدار...') : t('إصدار الرسوم')}
+                    </button>
+                </form>
+            </Modal>
+
+            {/* Record a payment */}
+            <Modal
+                open={Boolean(payingInvoice)}
+                onClose={() => setPayingInvoice(null)}
+                title={t('تسجيل دفعة')}
+                subtitle={payingInvoice ? `${payingInvoice.student_name} — ${payingInvoice.title}` : ''}
+            >
+                {payingInvoice && (
+                    <div className="space-y-4">
+                        <div className="grid grid-cols-3 gap-2 text-center">
+                            <div className="bg-slate-50 rounded-xl p-3">
+                                <p className="text-[9px] font-bold text-slate-400 uppercase">{t('الإجمالي')}</p>
+                                <p className="text-xs font-black text-slate-800 mt-1">{formatMoney(payingInvoice.net_amount ?? payingInvoice.amount)}</p>
+                            </div>
+                            <div className="bg-emerald-50 rounded-xl p-3">
+                                <p className="text-[9px] font-bold text-emerald-500 uppercase">{t('المسدد')}</p>
+                                <p className="text-xs font-black text-emerald-700 mt-1">{formatMoney(payingInvoice.paid_amount)}</p>
+                            </div>
+                            <div className="bg-rose-50 rounded-xl p-3">
+                                <p className="text-[9px] font-bold text-rose-500 uppercase">{t('المتبقي')}</p>
+                                <p className="text-xs font-black text-rose-700 mt-1">{formatMoney(payingInvoice.remaining)}</p>
+                            </div>
+                        </div>
+
+                        <form onSubmit={recordPayment} className="space-y-3">
+                            <div className="grid grid-cols-2 gap-3">
+                                <div>
+                                    <label className={labelClass}>{t('المبلغ')} <span className="text-red-500">*</span></label>
+                                    <input
+                                        type="number" min={1} max={payingInvoice.remaining} className={inputClass}
+                                        value={payForm.amount}
+                                        onChange={(e) => setPayForm((f) => ({ ...f, amount: e.target.value }))}
+                                        required
+                                    />
+                                </div>
+                                <div>
+                                    <label className={labelClass}>{t('طريقة الدفع')}</label>
+                                    <select
+                                        className={inputClass} value={payForm.method}
+                                        onChange={(e) => setPayForm((f) => ({ ...f, method: e.target.value }))}
+                                    >
+                                        {METHODS.map((m) => <option key={m} value={m}>{m}</option>)}
+                                    </select>
+                                </div>
+                            </div>
+                            <div>
+                                <label className={labelClass}>{t('تاريخ الدفع')}</label>
+                                <input
+                                    type="date" className={inputClass} value={payForm.paid_at}
+                                    onChange={(e) => setPayForm((f) => ({ ...f, paid_at: e.target.value }))}
+                                />
+                            </div>
+                            <div>
+                                <label className={labelClass}>{t('ملاحظة')}</label>
+                                <input
+                                    className={inputClass} value={payForm.note}
+                                    onChange={(e) => setPayForm((f) => ({ ...f, note: e.target.value }))}
+                                    placeholder={t('اسم الدافع، رقم الوصل الورقي...')}
+                                />
+                            </div>
+                            <button
+                                type="submit"
+                                disabled={busy}
+                                className="w-full bg-emerald-600 text-white py-3 rounded-xl font-bold text-sm shadow-lg shadow-emerald-100 disabled:opacity-60"
+                            >
+                                {busy ? t('جاري الحفظ...') : t('تأكيد الدفعة')}
+                            </button>
+                        </form>
+
+                        {invoicePayments.length > 0 && (
+                            <div>
+                                <SectionTitle title={t('الدفعات السابقة')} />
+                                <div className="space-y-2">
+                                    {invoicePayments.map((p) => (
+                                        <div key={p.id} className="bg-slate-50 rounded-xl p-3 flex items-center gap-3">
+                                            <div className="flex-1 min-w-0">
+                                                <p className="text-xs font-black text-slate-800">{formatMoney(p.amount)}</p>
+                                                <p className="text-[10px] text-slate-400 font-medium mt-0.5 truncate">
+                                                    {p.paid_at} · {p.method} · {p.recorded_by_name}
+                                                </p>
+                                            </div>
+                                            <span className="text-[9px] font-bold text-slate-400" dir="ltr">{p.receipt_no}</span>
+                                            {canDelete && (
+                                                <button
+                                                    onClick={() => reversePayment(p.id)}
+                                                    className="text-[10px] font-black text-red-500 hover:underline shrink-0"
+                                                >
+                                                    {t('إرجاع')}
+                                                </button>
+                                            )}
+                                        </div>
+                                    ))}
+                                </div>
+                            </div>
+                        )}
+                    </div>
+                )}
+            </Modal>
+        </div>
+    );
+};

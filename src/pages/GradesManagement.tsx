@@ -1,0 +1,569 @@
+import React, { useState, useEffect } from 'react';
+import { motion, AnimatePresence } from 'motion/react';
+import { GraduationCap, ChevronRight, ArrowRight, Plus, Trash2, Edit2, Users, Printer } from 'lucide-react';
+import { UserData, ClassData } from '../types';
+import { api, ApiError } from '../lib/api';
+import { t } from '../i18n';
+
+interface GradesManagementProps {
+    user: UserData;
+}
+
+export const GradesManagement: React.FC<GradesManagementProps> = ({ user }) => {
+    const [classes, setClasses] = useState<ClassData[]>([]);
+    const [selectedClass, setSelectedClass] = useState<ClassData | null>(null);
+    const [classStudents, setClassStudents] = useState<any[]>([]);
+    const [allGrades, setAllGrades] = useState<any[]>([]);
+    const [gradesNextCursor, setGradesNextCursor] = useState<string | null>(null);
+    const [loadingMoreGrades, setLoadingMoreGrades] = useState(false);
+    const [showAddGrade, setShowAddGrade] = useState<{ studentId: string, name: string } | null>(null);
+    const [editingGradeId, setEditingGradeId] = useState<string | null>(null);
+    const [newGrade, setNewGrade] = useState({ subject: '', score: '', total: '100', category: 'يومي', semester: 'الفصل الأول' });
+    const [showPrintOptions, setShowPrintOptions] = useState(false);
+    const [printFilter, setPrintFilter] = useState({ category: 'الكل', semester: 'الكل' });
+    const [subjects, setSubjects] = useState<any[]>([]);
+
+    const fetchData = async () => {
+        const url = (user.role === 'admin' || user.role === 'assistant_admin') ? '/api/classes' : `/api/teacher/classes/${user.id}`;
+        try {
+            setClasses(await api.get<ClassData[]>(url));
+        } catch {
+            setClasses([]);
+        }
+    };
+
+    useEffect(() => {
+        fetchData();
+        api.get<any[]>('/api/subjects').then(data => {
+            setSubjects(data);
+            if ((user.role === 'admin' || user.role === 'assistant_admin') && data.length > 0) {
+                setNewGrade(prev => ({ ...prev, subject: data[0].name }));
+            }
+        }).catch(() => setSubjects([]));
+
+        if (user.role === 'teacher' && user.subjects && user.subjects.length > 0) {
+            setNewGrade(prev => ({ ...prev, subject: user.subjects![0] }));
+        }
+    }, [user.id, user.role, user.subjects]);
+
+    useEffect(() => {
+        if (['نصف السنة', 'السعي السنوي '].includes(newGrade.semester) && newGrade.category !== 'الكل') {
+            setNewGrade(prev => ({ ...prev, category: 'الكل' }));
+        }
+    }, [newGrade.semester, newGrade.category]);
+
+    const handleSelectClass = async (c: ClassData) => {
+        setSelectedClass(c);
+        try {
+            const [studentsData, gradesRes] = await Promise.all([
+                api.get<any[]>(`/api/class/${c.id}/students`),
+                api.get<{ data: any[]; nextCursor: string | null }>(`/api/class/${c.id}/grades`)
+            ]);
+            setClassStudents(studentsData);
+            setAllGrades(gradesRes?.data || (Array.isArray(gradesRes) ? gradesRes : []));
+            setGradesNextCursor(gradesRes?.nextCursor || null);
+        } catch (err) {
+            alert(err instanceof ApiError ? err.message : t('تعذر تحميل بيانات الصف'));
+            setSelectedClass(null);
+        }
+    };
+
+    const handleLoadMoreGrades = async () => {
+        if (!selectedClass || !gradesNextCursor || loadingMoreGrades) return;
+        setLoadingMoreGrades(true);
+        try {
+            const res = await api.get<{ data: any[]; nextCursor: string | null }>(`/api/class/${selectedClass.id}/grades?after=${gradesNextCursor}`);
+            const list = res?.data || (Array.isArray(res) ? res : []);
+            setAllGrades((prev) => [...prev, ...list]);
+            setGradesNextCursor(res?.nextCursor || null);
+        } catch {
+            /* ignore */
+        } finally {
+            setLoadingMoreGrades(false);
+        }
+    };
+
+    const handlePrint = () => {
+        if (!selectedClass) return;
+
+        let filteredGrades = allGrades;
+        if (printFilter.category !== 'الكل') {
+            filteredGrades = filteredGrades.filter(g => (g.category || 'يومي') === printFilter.category);
+        }
+        if (printFilter.semester !== 'الكل') {
+            filteredGrades = filteredGrades.filter(g => (g.semester || 'الفصل الأول') === printFilter.semester);
+        }
+
+        const printWindow = window.open('', '_blank', 'width=800,height=600');
+        if (!printWindow) {
+            alert(t('الرجاء السماح بالنوافذ المنبثقة للطباعة'));
+            return;
+        }
+
+        const htmlContent = `
+      <html>
+        <head>
+          <title>تقرير درجات: ${selectedClass.name}</title>
+          <style>
+            body { font-family: sans-serif; padding: 40px; }
+            h1 { text-align: center; color: #334155; }
+            .header { margin-bottom: 30px; text-align: center; border-bottom: 2px solid #e2e8f0; padding-bottom: 15px; }
+            table { width: 100%; border-collapse: collapse; margin-top: 20px; }
+            th, td { border: 1px solid #e2e8f0; padding: 12px; text-align: right; }
+            th { background-color: #f8fafc; font-weight: bold; }
+            .student-name { background-color: #f1f5f9; font-weight: bold; }
+          </style>
+        </head>
+        <body>
+          <div class="header">
+            <h1>${t('تقرير درجات الطلاب')}</h1>
+            <p>الصف: ${selectedClass.name}</p>
+            <p>نوع التقرير: ${printFilter.category === 'الكل' ? t('جميع الدرجات') : printFilter.category} - ${printFilter.semester === 'الكل' ? t('جميع الفصول') : printFilter.semester}</p>
+            <p>التاريخ: ${new Date().toLocaleDateString('ar-EG')}</p>
+          </div>
+          <table>
+            <thead>
+              <tr>
+                <th style="width: 200px;">${t('اسم الطالب')}</th>
+                ${[...new Set(filteredGrades.map(g => g.subject))].map(sub => `<th>${sub}</th>`).join('')}
+              </tr>
+            </thead>
+            <tbody>
+              ${classStudents.map(s => {
+            const sGrades = filteredGrades.filter(g => g.student_id === s.id);
+            const uniqueSubjects = [...new Set(filteredGrades.map(g => g.subject))];
+            return `
+                  <tr>
+                    <td class="student-name">${s.name}</td>
+                    ${uniqueSubjects.map(sub => {
+                const grade = sGrades.find(g => g.subject === sub);
+                let catLabel = grade?.category || 'يومي';
+                if (catLabel === 'امتحان فصل') {
+                    catLabel = (grade?.semester === 'الفصل الثاني' ? 'درجة فصل ثاني' : 'درجة فصل اول');
+                } else if (catLabel === 'الكل') {
+                    if (grade?.semester === 'نصف السنة') catLabel = 'درجة نصف السنة';
+                    else if (grade?.semester === 'السعي السنوي ') catLabel = 'درجة سنوية';
+                }
+                return `<td>${grade ? `${grade.score} / ${grade.total}<br><small>(${t(catLabel)})</small>` : '-'}</td>`;
+            }).join('')}
+                  </tr>
+                `;
+        }).join('')}
+            </tbody>
+          </table>
+          <script>
+            window.onload = () => { window.print(); };
+          </script>
+        </body>
+      </html>
+    `;
+
+        printWindow.document.write(htmlContent);
+        printWindow.document.close();
+        setShowPrintOptions(false);
+    };
+
+    const handleAddGrade = async (e: React.FormEvent) => {
+        e.preventDefault();
+        if (!showAddGrade || !selectedClass) return;
+
+        if (!newGrade.subject && user.role === 'teacher') {
+            alert(t('يرجى اختيار المادة أولاً'));
+            return;
+        }
+
+        const score = parseInt(newGrade.score);
+        const total = parseInt(newGrade.total);
+
+        if (isNaN(score) || isNaN(total)) {
+            alert(t('يرجى إدخال أرقام صحيحة للدرجات'));
+            return;
+        }
+
+        let status = 'ممتاز';
+        const ratio = score / total;
+        if (ratio < 0.5) status = 'راسب';
+        else if (ratio < 0.75) status = 'جيد';
+        else if (ratio < 0.9) status = 'جيد جداً';
+
+        try {
+            const payload = {
+                student_id: showAddGrade.studentId,
+                class_id: selectedClass.id,
+                subject: newGrade.subject,
+                score,
+                total,
+                status,
+                category: newGrade.category,
+                semester: newGrade.semester,
+            };
+
+            // The acting user is taken from the session on the server; sending
+            // an id from here would just be a claim the server has to ignore.
+            if (editingGradeId) {
+                await api.put(`/api/grades/${editingGradeId}`, payload);
+            } else {
+                await api.post('/api/grades', payload);
+            }
+
+            setShowAddGrade(null);
+            setEditingGradeId(null);
+            const defaultSub = (user.role === 'teacher' && user.subjects && user.subjects.length > 0) ? user.subjects[0] : (editingGradeId ? newGrade.subject : 'الرياضيات');
+            setNewGrade({ subject: defaultSub, score: '', total: '100', category: 'يومي', semester: 'الفصل الأول' });
+            alert(editingGradeId ? 'تم تحديث الدرجة بنجاح' : 'تمت إضافة الدرجة بنجاح');
+            handleSelectClass(selectedClass);
+        } catch (err) {
+            alert(err instanceof ApiError ? err.message : t('حدث خطأ أثناء حفظ الدرجة'));
+        }
+    };
+
+    const handleEditGrade = (g: any, studentName: string) => {
+        setEditingGradeId(g.id);
+        setShowAddGrade({ studentId: g.student_id, name: studentName });
+        setNewGrade({
+            subject: g.subject,
+            score: g.score.toString(),
+            total: g.total.toString(),
+            // Form state is posted back to the API, so it holds the stored
+            // Arabic value — translation happens only where it is displayed.
+            category: g.category || 'يومي',
+            semester: g.semester || 'الفصل الأول'
+        });
+    };
+
+    const handleDeleteGrade = async (gradeId: string) => {
+        if (confirm(t('هل أنت متأكد من حذف هذه الدرجة نهائياً؟ لا يمكن التراجع عن هذه الخطوة.'))) {
+            try {
+                await api.del(`/api/grades/${gradeId}`);
+                if (selectedClass) handleSelectClass(selectedClass);
+            } catch (err) {
+                alert(err instanceof ApiError ? err.message : t('تعذر حذف الدرجة'));
+            }
+        }
+    };
+
+    return (
+        <div className="p-4 md:p-6 space-y-4 md:space-y-6 max-w-3xl lg:max-w-5xl mx-auto">
+            {!selectedClass ? (
+                <div className="space-y-4">
+                    <div>
+                        <h3 className="text-xl font-black text-slate-900 tracking-tight">
+                            {user.role === 'admin' ? t('إدارة درجات جميع الصفوف') : t('اختيار الصف لتعديل الدرجات')}
+                        </h3>
+                        <p className="text-xs text-slate-400 font-bold mt-0.5">
+                            {t('اختر صفاً لعرض طلابه ورصد درجاتهم')}
+                        </p>
+                    </div>
+                    <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+                        {classes.map(c => (
+                            <button
+                                key={c.id}
+                                onClick={() => handleSelectClass(c)}
+                                className="w-full text-right bg-white p-5 rounded-[1.5rem] ring-1 ring-slate-900/[0.06] shadow-[0_1px_2px_rgba(15,23,42,0.04),0_10px_30px_-18px_rgba(15,23,42,0.3)] flex items-center justify-between hover:ring-brand-200 active:scale-[0.99] transition-all rise"
+                            >
+                                <div className="flex items-center gap-4 min-w-0">
+                                    <div className="w-12 h-12 bg-brand-50 ring-1 ring-brand-100 rounded-2xl flex items-center justify-center text-brand-700 shrink-0">
+                                        <GraduationCap className="w-6 h-6" />
+                                    </div>
+                                    <p className="font-black text-slate-900 truncate">{c.name}</p>
+                                </div>
+                                <ChevronRight className="w-5 h-5 text-slate-300" />
+                            </button>
+                        ))}
+                    </div>
+                </div>
+            ) : (
+                <div className="space-y-6">
+                    <div className="flex items-center gap-2 mb-4">
+                        <button onClick={() => setSelectedClass(null)} className="p-2 bg-slate-100 rounded-full hover:bg-slate-200">
+                            <ArrowRight className="w-4 h-4 text-slate-600" />
+                        </button>
+                        <h3 className="text-xl font-black text-slate-900 tracking-tight truncate">
+                            {t('درجات صف')}: {selectedClass.name}
+                        </h3>
+                    </div>
+
+                    {(user.role === 'admin' || user.role === 'assistant_admin') && (
+                        <button
+                            onClick={() => setShowPrintOptions(true)}
+                            className="w-full sm:w-auto sm:px-6 flex items-center justify-center gap-2 bg-brand-900 text-white py-3 rounded-2xl text-sm font-black hover:bg-brand-800 active:scale-[0.99] transition-all shadow-lg shadow-brand-900/25"
+                        >
+                            <Printer className="w-5 h-5 text-gold-400" />
+                            {t('طباعة تقرير الدرجات')}
+                        </button>
+                    )}
+                    <div className="space-y-4 lg:space-y-0 lg:grid lg:grid-cols-2 lg:gap-4 lg:items-start">
+                        {classStudents.length > 0 ? (
+                            classStudents.map(student => {
+                                let studentGrades = allGrades.filter(g => g.student_id === student.id);
+                                if (user.role === 'teacher' && user.subjects) {
+                                    studentGrades = studentGrades.filter(g => user.subjects?.includes(g.subject));
+                                }
+                                return (
+                                    <div key={student.id} className="bg-white p-5 rounded-[1.5rem] ring-1 ring-slate-900/[0.06] shadow-[0_1px_2px_rgba(15,23,42,0.04),0_10px_30px_-18px_rgba(15,23,42,0.25)] space-y-4 rise">
+                                        <div className="flex justify-between items-center">
+                                            <div className="flex items-center gap-3">
+                                                <div className="w-10 h-10 bg-slate-50 rounded-full flex items-center justify-center text-slate-500 font-bold">
+                                                    {student.name.charAt(0)}
+                                                </div>
+                                                <p className="font-bold text-slate-800 text-sm">{student.name}</p>
+                                            </div>
+                                            {(user.role === 'admin' || user.role === 'teacher') && (
+                                                <button
+                                                    onClick={() => setShowAddGrade({ studentId: student.id, name: student.name })}
+                                                    className="text-brand-700 text-xs font-bold flex items-center gap-1 bg-brand-50 px-3 py-1.5 rounded-full"
+                                                >
+                                                    <Plus className="w-3 h-3" /> {t('إضافة درجة')}
+                                                </button>
+                                            )}
+                                        </div>
+
+                                        <div className="space-y-2">
+                                            {studentGrades.length > 0 ? (
+                                                studentGrades.map(g => (
+                                                    <div key={g.id} className="flex justify-between items-center bg-slate-50/50 p-3 rounded-2xl border border-slate-50">
+                                                        <div>
+                                                            <p className="text-xs font-bold text-slate-700">
+                                                                {g.subject} - {g.category === 'امتحان فصل' ? (g.semester === 'الفصل الثاني' ? t('درجة فصل ثاني') : t('درجة فصل اول')) : (g.category === 'الكل' ? (g.semester === 'نصف السنة' ? t('درجة نصف السنة') : t('درجة سنوية')) : (g.category || t('يومي')))}
+                                                            </p>
+                                                            <p className="text-[10px] text-slate-400">{(g.semester || t('الفصل الأول'))} | {g.category === 'امتحان فصل' ? (g.semester === 'الفصل الثاني' ? t('درجة فصل ثاني') : t('درجة فصل اول')) : (g.category === 'الكل' ? (g.semester === 'نصف السنة' ? t('درجة نصف السنة') : t('درجة سنوية')) : (g.category || t('يومي')))}</p>
+                                                        </div>
+                                                        <div className="flex items-center gap-2">
+                                                            <p className="font-bold text-slate-800 text-sm ml-2">{g.score} <span className="text-[10px] text-slate-300">/ {g.total}</span></p>
+                                                            {(user.role === 'admin' || user.role === 'teacher') && (
+                                                                <>
+                                                                    <button
+                                                                        onClick={() => handleEditGrade(g, student.name)}
+                                                                        className="text-blue-500 hover:bg-blue-50 p-1.5 rounded-lg transition-colors"
+                                                                    >
+                                                                        <Edit2 className="w-3.5 h-3.5" />
+                                                                    </button>
+                                                                    <button
+                                                                        onClick={() => handleDeleteGrade(g.id)}
+                                                                        className="text-red-400 hover:text-red-600 hover:bg-red-50 p-1.5 rounded-lg transition-colors border border-transparent hover:border-red-100"
+                                                                    >
+                                                                        <Trash2 className="w-3.5 h-3.5" />
+                                                                    </button>
+                                                                </>
+                                                            )}
+                                                        </div>
+                                                    </div>
+                                                ))
+                                            ) : (
+                                                <p className="text-[10px] text-slate-400 text-center py-2">{t('لا توجد درجات مضافة بعد')}</p>
+                                            )}
+                                        </div>
+                                    </div>
+                                );
+                            })
+                        ) : (
+                            <div className="p-10 text-center text-slate-400">
+                                <Users className="w-12 h-12 mx-auto mb-3 opacity-20" />
+                                <p>{t('لا يوجد طلاب مسجلين في هذا الصف')}</p>
+                            </div>
+                        )}
+                    </div>
+                    {gradesNextCursor && (
+                        <div className="text-center pt-2">
+                            <button
+                                onClick={handleLoadMoreGrades}
+                                disabled={loadingMoreGrades}
+                                className="px-5 py-2.5 bg-brand-50 hover:bg-brand-100 text-brand-700 rounded-xl text-xs font-black transition-all disabled:opacity-50"
+                            >
+                                {loadingMoreGrades ? t('جاري التحميل...') : t('تحميل المزيد من الدرجات')}
+                            </button>
+                        </div>
+                    )}
+
+                    {showAddGrade && (
+                        <AnimatePresence>
+                            <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm flex items-center justify-center z-[100] p-6">
+                                <motion.div
+                                    initial={{ scale: 0.9, opacity: 0 }}
+                                    animate={{ scale: 1, opacity: 1 }}
+                                    className="bg-white w-full max-sm rounded-3xl p-6 shadow-2xl space-y-4"
+                                >
+                                    <h4 className="font-bold text-slate-800">{editingGradeId ? t('تعديل درجة الطالب') : t('إضافة درجة للطالب')}: {showAddGrade.name}</h4>
+                                    <form onSubmit={handleAddGrade} className="space-y-4">
+                                        <div>
+                                            <div className="grid grid-cols-2 gap-4 mb-4">
+                                                <div>
+                                                    <label className="block text-[10px] font-bold text-slate-400 mb-1">{t('نوع الدرجة')}</label>
+                                                    <select
+                                                        className="w-full px-4 py-2 rounded-xl border border-slate-100 outline-none text-sm bg-slate-50 font-sans transition-all"
+                                                        value={newGrade.category}
+                                                        onChange={e => setNewGrade({ ...newGrade, category: e.target.value })}
+                                                    >
+                                                        {newGrade.semester === 'نصف السنة' ? (
+                                                            <option value="الكل">{t('درجة نصف السنة')}</option>
+                                                        ) : newGrade.semester === 'السعي السنوي ' ? (
+                                                            <option value="الكل">{t('درجة سنوية')}</option>
+                                                        ) : (
+                                                            <>
+                                                                <option value="يومي">{t('يومي')}</option>
+                                                                <option value="شهر أول">{t('شهر أول')}</option>
+                                                                <option value="شهر ثاني">{t('شهر ثاني')}</option>
+                                                                <option value="امتحان فصل">
+                                                                    {newGrade.semester === 'الفصل الثاني' ? t('درجة فصل ثاني') : t('درجة فصل اول')}
+                                                                </option>
+                                                            </>
+                                                        )}
+                                                    </select>
+                                                </div>
+                                                <div>
+                                                    <label className="block text-[10px] font-bold text-slate-400 mb-1">{t('الفصل الدراسي')}</label>
+                                                    <select
+                                                        className="w-full px-4 py-2 rounded-xl border border-slate-100 outline-none text-sm bg-slate-50 font-sans"
+                                                        value={newGrade.semester}
+                                                        onChange={e => setNewGrade({ ...newGrade, semester: e.target.value })}
+                                                    >
+                                                        <option value="الفصل الأول">{t('الفصل الأول')}</option>
+                                                        <option value="الفصل الثاني">{t('الفصل الثاني')}</option>
+                                                        <option value="نصف السنة">{t('نصف السنة')} </option>
+                                                        <option value="السعي السنوي ">{t('السعي السنوي')}  </option>
+                                                    </select>
+                                                </div>
+                                            </div>
+                                            <label className="block text-[10px] font-bold text-slate-400 mb-1">{t('المادة')}</label>
+                                            <select
+                                                className="w-full px-4 py-2 rounded-xl border border-slate-100 outline-none text-sm bg-slate-50 font-sans"
+                                                value={newGrade.subject}
+                                                onChange={e => setNewGrade({ ...newGrade, subject: e.target.value })}
+                                                disabled={!!editingGradeId}
+                                            >
+                                                {user.role === 'admin' || user.role === 'assistant_admin' ? (
+                                                    subjects.map(s => (
+                                                        <option key={s.id} value={s.name}>{s.name}</option>
+                                                    ))
+                                                ) : (
+                                                    user.subjects && user.subjects.length > 0 ? (
+                                                        user.subjects.map(s => (
+                                                            <option key={s} value={s}>{s}</option>
+                                                        ))
+                                                    ) : (
+                                                        <option value="" disabled>{t('لا توجد مواد معينة')}</option>
+                                                    )
+                                                )}
+                                            </select>
+                                        </div>
+                                        <div className="grid grid-cols-2 gap-4">
+                                            <div>
+                                                <label className="block text-[10px] font-bold text-slate-400 mb-1">{t('الدرجة')}</label>
+                                                <input
+                                                    type="number"
+                                                    required
+                                                    className="w-full px-4 py-2 rounded-xl border border-slate-100 outline-none text-sm bg-slate-50"
+                                                    value={newGrade.score}
+                                                    onChange={e => setNewGrade({ ...newGrade, score: e.target.value })}
+                                                />
+                                            </div>
+                                            <div>
+                                                <label className="block text-[10px] font-bold text-slate-400 mb-1">{t('الدرجة الكلية')}</label>
+                                                <input
+                                                    type="number"
+                                                    required
+                                                    className="w-full px-4 py-2 rounded-xl border border-slate-100 outline-none text-sm bg-slate-50"
+                                                    value={newGrade.total}
+                                                    onChange={e => setNewGrade({ ...newGrade, total: e.target.value })}
+                                                />
+                                            </div>
+                                        </div>
+                                        <div className="flex gap-3 pt-2">
+                                            <button
+                                                type="button"
+                                                onClick={() => {
+                                                    setShowAddGrade(null);
+                                                    setEditingGradeId(null);
+                                                    const defaultSub = (user.role === 'teacher' && user.subjects && user.subjects.length > 0) ? user.subjects[0] : 'الرياضيات';
+                                                    setNewGrade({ subject: defaultSub, score: '', total: '100', category: 'يومي', semester: 'الفصل الأول' });
+                                                }}
+                                                className="flex-1 py-2 bg-slate-100 text-slate-600 rounded-xl font-bold text-sm"
+                                            >
+                                                {t('إلغاء')}
+                                            </button>
+                                            <button
+                                                type="submit"
+                                                className="flex-1 py-2 bg-brand-700 text-white rounded-xl font-bold text-sm"
+                                            >
+                                                {editingGradeId ? t('تحديث') : t('حفظ')}
+                                            </button>
+                                        </div>
+                                    </form>
+                                </motion.div>
+                            </div>
+                        </AnimatePresence>
+                    )}
+                </div>
+            )}
+
+            {showPrintOptions && (
+                <AnimatePresence>
+                    <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-md flex items-center justify-center z-[999] p-6">
+                        <motion.div
+                            initial={{ scale: 0.9, opacity: 0 }}
+                            animate={{ scale: 1, opacity: 1 }}
+                            className="bg-white w-full max-w-sm rounded-3xl p-6 shadow-2xl space-y-4"
+                        >
+                            <h4 className="font-bold text-slate-800 text-center">{t('خيارات طباعة التقرير')}</h4>
+                            <div className="space-y-5">
+                                <div>
+                                    <label className="block text-xs font-bold text-slate-400 mb-3">{t('الفصل الدراسي')}</label>
+                                    <div className="grid grid-cols-2 gap-2">
+                                        {['الكل', 'الفصل الأول', 'الفصل الثاني', 'نصف السنة', 'السعي السنوي '].map(sem => (
+                                            <button
+                                                key={sem}
+                                                type="button"
+                                                onClick={() => {
+                                                    const newFilter = { ...printFilter, semester: sem };
+                                                    if (['نصف السنة', 'السعي السنوي '].includes(sem)) {
+                                                        newFilter.category = 'الكل';
+                                                    }
+                                                    setPrintFilter(newFilter);
+                                                }}
+                                                className={`py-2 px-1 rounded-xl text-[10px] font-bold transition-all border ${printFilter.semester === sem ? 'bg-brand-700 text-white border-brand-700 shadow-lg shadow-brand-100' : 'bg-slate-50 text-slate-500 border-slate-100 hover:bg-slate-100'}`}
+                                            >
+                                                {sem}
+                                            </button>
+                                        ))}
+                                    </div>
+                                </div>
+                                {!['نصف السنة', 'السعي السنوي '].includes(printFilter.semester) && (
+                                    <div>
+                                        <label className="block text-xs font-bold text-slate-400 mb-3">{t('نوع الدرجات المراد طباعتها')}</label>
+                                        <div className="grid grid-cols-2 gap-2">
+                                            {['الكل', 'يومي', 'شهر أول', 'شهر ثاني', 'امتحان فصل'].map(cat => (
+                                                <button
+                                                    key={cat}
+                                                    type="button"
+                                                    onClick={() => setPrintFilter({ ...printFilter, category: cat })}
+                                                    className={`py-2.5 px-3 rounded-xl text-xs font-bold transition-all border ${printFilter.category === cat ? 'bg-brand-700 text-white border-brand-700 shadow-lg shadow-brand-100' : 'bg-slate-50 text-slate-500 border-slate-100 hover:bg-slate-100'}`}
+                                                >
+                                                    {cat === 'امتحان فصل' ? (printFilter.semester === 'الفصل الثاني' ? t('درجة فصل ثاني') : t('درجة فصل اول')) : cat}
+                                                </button>
+                                            ))}
+                                        </div>
+                                    </div>
+                                )}
+                            </div>
+                            <div className="flex gap-3 pt-4 border-t border-slate-50">
+                                <button
+                                    type="button"
+                                    onClick={() => setShowPrintOptions(false)}
+                                    className="flex-1 py-3 bg-slate-100 text-slate-600 rounded-xl font-bold text-sm hover:bg-slate-200 transition-colors"
+                                >
+                                    {t('إلغاء')}
+                                </button>
+                                <button
+                                    onClick={handlePrint}
+                                    className="flex-1 py-3 bg-brand-700 text-white rounded-xl font-bold text-sm shadow-lg shadow-brand-200 hover:bg-brand-800 transition-colors"
+                                >
+                                    {t('بدء الطباعة')}
+                                </button>
+                            </div>
+                        </motion.div>
+                    </div>
+                </AnimatePresence>
+            )}
+        </div>
+    );
+};
