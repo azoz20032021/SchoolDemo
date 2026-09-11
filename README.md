@@ -9,7 +9,7 @@ world generated in the browser, so the whole product runs as a static site with
 no backend, no database and no keys. The school's own deployment — with real
 children's records — is private and shares nothing with this.
 
-👉 **[Open the demo](#)** — four buttons, one per role. No credentials to type.
+👉 **[Open the demo → abdulazeezdoman.tech](https://abdulazeezdoman.tech)** — four buttons, one per role. No credentials to type.
 
 ---
 
