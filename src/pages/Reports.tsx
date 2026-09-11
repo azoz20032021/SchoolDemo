@@ -280,7 +280,7 @@ export const Reports: React.FC<{ user: UserData }> = ({ user }) => {
 
                         {tab !== 'student' && (
                             <div>
-                                <label className={labelClass}>الصف {tab === 'class' && <span className="text-red-500">*</span>}</label>
+                                <label className={labelClass}>{t('الصف')} {tab === 'class' && <span className="text-red-500">*</span>}</label>
                                 <select className={inputClass} value={selectedClass} onChange={(e) => setSelectedClass(e.target.value)}>
                                     <option value="">{tab === 'class' ? t('-- اختر الصف --') : t('كل الصفوف')}</option>
                                     {classes.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
@@ -346,7 +346,7 @@ export const Reports: React.FC<{ user: UserData }> = ({ user }) => {
                     <IdentityTable
                         rows={[
                             ['الاسم', data.student.name],
-                            ['الصف', data.student.class_name || '—'],
+                            [t('الصف'), data.student.class_name || '—'],
                             ['الرقم الوطني', data.student.national_id || '—'],
                             ['اسم الأم', data.student.mother_name || '—'],
                             ['ولي الأمر', [data.student.guardian_name, data.student.guardian_phone].filter(Boolean).join(' — ') || '—'],

@@ -122,11 +122,25 @@ export const Login: React.FC = () => {
                     ))}
                 </div>
 
-                <p className="text-center text-[11px] font-bold text-brand-300 mt-5 leading-relaxed">
-                    Everything runs in your browser — there is no backend and no database.
-                    <br className="hidden sm:block" />
-                    Nothing is saved: refresh and the school goes back to how it started.
-                </p>
+                <div className="mt-5 space-y-2 text-center">
+                    <p className="text-[11px] font-bold text-brand-300 leading-relaxed">
+                        Everything runs in your browser — there is no backend and no database.
+                        <br className="hidden sm:block" />
+                        Nothing is saved: refresh and the school goes back to how it started.
+                    </p>
+
+                    {/*
+                      * Said plainly, because it explains the shape of everything
+                      * a visitor is about to see. A parent checks their son's
+                      * attendance on a phone at seven in the morning; the office
+                      * is the only part of this that lives on a desktop.
+                      */}
+                    <p className="text-[11px] font-bold text-gold-300/90 leading-relaxed">
+                        Designed for phones first — that is where parents and students actually use it.
+                        <br className="hidden sm:block" />
+                        The office screens are laid out for a desktop as well.
+                    </p>
+                </div>
             </motion.div>
         </div>
     );

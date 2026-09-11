@@ -49,10 +49,10 @@ const StudentView: React.FC<{ user: UserData }> = ({ user }) => {
                     <h3 className="text-3xl font-black">{summary.conduct_score}/100</h3>
                     <div className="mt-4 flex gap-2">
                         <div className="bg-white/20 px-3 py-1 rounded-full text-[10px] font-bold">
-                            {summary.positive} ملاحظة إيجابية
+                            {t('{count} ملاحظة إيجابية', { count: summary.positive })}
                         </div>
                         <div className="bg-white/20 px-3 py-1 rounded-full text-[10px] font-bold">
-                            {summary.negative} ملاحظة سلبية
+                            {t('{count} ملاحظة سلبية', { count: summary.negative })}
                         </div>
                     </div>
                 </div>

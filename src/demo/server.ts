@@ -40,7 +40,11 @@ function financeFor(studentId: string) {
         total_paid: paid,
         outstanding: Math.max(0, billed - paid),
         is_clear: billed - paid <= 0,
-        invoices: rows.map((i) => ({ ...i, net_amount: i.amount - i.discount, remaining: Math.max(0, i.amount - i.discount - i.paid_amount) })),
+        invoices: rows.map((i): Row => ({
+            ...i,
+            net_amount: i.amount - i.discount,
+            remaining: Math.max(0, i.amount - i.discount - i.paid_amount),
+        })),
     };
 }
 
@@ -218,14 +222,52 @@ const ROUTES: [RegExp, Handler][] = [
     [/^\/api\/subjects$/, () => world.subjects],
     [/^\/api\/periods$/, () => world.periods],
     [/^\/api\/admin\/periods$/, ({ method, body }) => {
-        if (method === 'PUT' || method === 'POST') {
-            world.periods = body?.periods || world.periods;
-            return { success: true };
-        }
-        return world.periods;
+        if (method !== 'PUT' && method !== 'POST') return world.periods;
+
+        const next = body?.periods || world.periods;
+        let moved = 0;
+
+        // A changed bell time has to take its lessons with it, or the timetable
+        // quietly keeps pointing at a time that no longer exists.
+        world.periods.forEach((old, i) => {
+            const replacement = next[i];
+            if (!replacement || replacement.time === old.time) return;
+            world.schedules.forEach((lesson) => {
+                if (lesson.time === old.time) {
+                    lesson.time = replacement.time;
+                    moved++;
+                }
+            });
+        });
+
+        world.periods = next;
+        return { success: true, periods: world.periods, moved_lessons: moved };
     }],
 
     [/^\/api\/schedules\/([^/]+)$/, ({ parts }) => world.schedules.filter((s) => s.class_id === parts[0])],
+
+    [/^\/api\/admin\/schedules$/, ({ body }) => {
+        const teacher = byId(world.users, body?.teacher_id || '');
+        const row = {
+            id: `sc-${Date.now()}`,
+            class_id: body?.class_id,
+            class_name: classNameOf(body?.class_id),
+            day: body?.day,
+            time: body?.time,
+            subject: body?.subject,
+            teacher_id: body?.teacher_id || null,
+            teacher: teacher?.name || body?.teacher || '',
+            teacher_name: teacher?.name || '',
+            room: body?.room || '',
+        };
+        world.schedules.push(row);
+        return { success: true, id: row.id };
+    }],
+
+    [/^\/api\/admin\/schedules\/([^/]+)$/, ({ parts }) => {
+        world.schedules = world.schedules.filter((row) => row.id !== parts[0]);
+        return { success: true };
+    }],
 
     [/^\/api\/class\/([^/]+)\/students$/, ({ parts }) =>
         students().filter((s) => s.class_id === parts[0]).map((s) => ({ id: s.id, name: s.name, uid: s.uid }))],
@@ -265,8 +307,145 @@ const ROUTES: [RegExp, Handler][] = [
     }],
     [/^\/api\/student\/([^/]+)\/bus$/, ({ parts }) => busFor(byId(world.users, parts[0])!)],
     [/^\/api\/student\/([^/]+)\/finance$/, ({ parts }) => financeFor(parts[0])],
-    [/^\/api\/student\/([^/]+)\/behavior$/, ({ parts }) => behaviorFor(parts[0]).notes],
+    [/^\/api\/student\/([^/]+)\/behavior$/, ({ parts }) => {
+        const { notes, conduct_score } = behaviorFor(parts[0]);
+        return {
+            notes,
+            summary: {
+                conduct_score,
+                positive: notes.filter((n) => n.type === 'positive').length,
+                negative: notes.filter((n) => n.type === 'negative').length,
+                total: notes.length,
+            },
+        };
+    }],
     [/^\/api\/student\/([^/]+)\/attendance$/, ({ parts }) => attendanceFor(parts[0]).records],
+
+    /* ------------------------------ the reports ------------------------------ */
+
+    [/^\/api\/reports\/class\/([^/]+)$/, ({ parts }) => {
+        const klass = byId(world.classes, parts[0]);
+        const roll = students().filter((s) => s.class_id === parts[0]);
+        const subjects = [...new Set(world.grades.filter((g) => g.class_id === parts[0]).map((g) => g.subject))].sort();
+
+        const rows = roll.map((student) => {
+            const marks = gradesFor(student.id);
+            const bySubject = new Map(marks.stats.subjects.map((x) => [x.subject, x.percentage]));
+            return {
+                student_id: student.id,
+                name: student.name,
+                uid: student.uid,
+                overall_percentage: marks.stats.overall_percentage,
+                subjects: Object.fromEntries(subjects.map((sub) => [sub, bySubject.get(sub) ?? null])),
+                attendance: attendanceFor(student.id).stats,
+                outstanding: financeFor(student.id).outstanding,
+            };
+        }).sort((a, b) => (b.overall_percentage ?? -1) - (a.overall_percentage ?? -1));
+
+        const marked = rows.filter((r) => r.overall_percentage !== null);
+
+        return {
+            generated_at: new Date().toISOString(),
+            currency: 'IQD',
+            class: klass,
+            subjects,
+            students: rows,
+            class_average: marked.length
+                ? Math.round(marked.reduce((sum, r) => sum + (r.overall_percentage || 0), 0) / marked.length)
+                : null,
+        };
+    }],
+
+    [/^\/api\/reports\/attendance$/, ({ query }) => {
+        const from = query.get('from') || TODAY;
+        const to = query.get('to') || TODAY;
+        const classId = query.get('class_id');
+
+        const roll = students().filter((s) => !classId || s.class_id === classId);
+
+        const rows = roll.map((student) => {
+            const records = world.attendance.filter(
+                (a) => a.student_id === student.id && a.date >= from && a.date <= to
+            );
+            const absent = records.filter((r) => r.status === 'absent').length;
+            const late = records.filter((r) => r.status === 'late').length;
+            const present = records.filter((r) => r.status === 'present').length;
+
+            return {
+                student_id: student.id,
+                name: student.name,
+                uid: student.uid,
+                class_name: student.class_name,
+                guardian_phone: student.guardian_phone,
+                present, absent, late,
+                excused: records.filter((r) => r.status === 'excused').length,
+                total: records.length,
+                rate: records.length ? Math.round((present / records.length) * 100) : 100,
+            };
+        }).sort((a, b) => b.absent - a.absent);
+
+        return { from, to, class_id: classId || null, generated_at: new Date().toISOString(), students: rows };
+    }],
+
+    [/^\/api\/admin\/finance\/students$/, ({ query }) => {
+        const classId = query.get('class_id');
+        const onlyDebtors = query.get('only_debtors') === '1';
+
+        let rows = students()
+            .filter((s) => !classId || s.class_id === classId)
+            .map((student) => {
+                const finance = financeFor(student.id);
+                const overdue = finance.invoices.filter((i) => i.remaining > 0 && i.due_date < TODAY);
+                const nextDue = finance.invoices
+                    .filter((i) => i.remaining > 0)
+                    .map((i) => i.due_date)
+                    .sort()[0] || null;
+
+                return {
+                    student_id: student.id,
+                    name: student.name,
+                    uid: student.uid,
+                    national_id: student.national_id || '',
+                    phone: student.phone || '',
+                    guardian_phone: student.guardian_phone || '',
+                    class_id: student.class_id,
+                    class_name: student.class_name,
+                    total_billed: finance.total_billed,
+                    total_paid: finance.total_paid,
+                    outstanding: finance.outstanding,
+                    overdue_amount: overdue.reduce((sum, i) => sum + i.remaining, 0),
+                    next_due_date: nextDue,
+                    payment_status: finance.is_clear
+                        ? (finance.total_billed > 0 ? 'مسدد' : 'لا توجد رسوم')
+                        : (overdue.length > 0 ? 'متأخر' : 'عليه مستحقات'),
+                    is_clear: finance.is_clear,
+                    is_overdue: overdue.length > 0,
+                };
+            });
+
+        if (onlyDebtors) rows = rows.filter((r) => r.outstanding > 0);
+        rows.sort((a, b) => b.outstanding - a.outstanding);
+
+        const totals = rows.reduce(
+            (acc, r) => ({
+                billed: acc.billed + r.total_billed,
+                paid: acc.paid + r.total_paid,
+                outstanding: acc.outstanding + r.outstanding,
+            }),
+            { billed: 0, paid: 0, outstanding: 0 }
+        );
+
+        return {
+            generated_at: new Date().toISOString(),
+            currency: 'IQD',
+            class_id: classId || null,
+            students: rows,
+            totals,
+            total_billed: totals.billed,
+            total_collected: totals.paid,
+            outstanding: totals.outstanding,
+        };
+    }],
 
     /* ------------------------------- a parent ------------------------------- */
 

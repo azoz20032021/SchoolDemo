@@ -92,7 +92,11 @@ const CLASS_NAMES = [
     'Grade 10 — A', 'Grade 10 — B', 'Grade 11 — Science', 'Grade 12 — Science',
 ];
 
-const DAYS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday'];
+/* The values the application itself stores; the interface translates them. */
+const DAYS = ['الأحد', 'الإثنين', 'الثلاثاء', 'الأربعاء', 'الخميس'];
+
+const SEMESTER = 'الفصل الأول';
+const CATEGORIES = ['يومي', 'اختبار قصير', 'امتحان شهري', 'امتحان فصل'];
 
 export function buildWorld(): World {
     seed = 20260911;
@@ -170,7 +174,7 @@ export function buildWorld(): World {
                 class_name: klass.name,
                 guardian_name: `${pick(FIRST)} ${studentName.split(' ')[1]}`,
                 guardian_phone: guardianPhone,
-                guardian_relation: 'Father',
+                guardian_relation: 'الأب',
                 phone: `07${between(70, 79)}${between(1000000, 9999999)}`,
                 birth_date: `${between(2007, 2010)}-0${between(1, 9)}-1${between(0, 9)}`,
                 address: `${pick(['Al-Andalus', 'Al-Mansour', 'Karrada', 'Zayouna'])} district`,
@@ -214,12 +218,12 @@ export function buildWorld(): World {
     /* ------------------------------ timetable ----------------------------- */
 
     const periods = [
-        { id: 'p1', index: 1, start: '08:00', end: '08:45' },
-        { id: 'p2', index: 2, start: '08:50', end: '09:35' },
-        { id: 'p3', index: 3, start: '09:40', end: '10:25' },
-        { id: 'p4', index: 4, start: '10:45', end: '11:30' },
-        { id: 'p5', index: 5, start: '11:35', end: '12:20' },
-        { id: 'p6', index: 6, start: '12:25', end: '13:10' },
+        { id: 'p1', index: 1, label: 'الحصة الأولى', time: '08:00 - 08:45', start: '08:00', end: '08:45' },
+        { id: 'p2', index: 2, label: 'الحصة الثانية', time: '08:50 - 09:35', start: '08:50', end: '09:35' },
+        { id: 'p3', index: 3, label: 'الحصة الثالثة', time: '09:40 - 10:25', start: '09:40', end: '10:25' },
+        { id: 'p4', index: 4, label: 'الحصة الرابعة', time: '10:45 - 11:30', start: '10:45', end: '11:30' },
+        { id: 'p5', index: 5, label: 'الحصة الخامسة', time: '11:35 - 12:20', start: '11:35', end: '12:20' },
+        { id: 'p6', index: 6, label: 'الحصة السادسة', time: '12:25 - 13:10', start: '12:25', end: '13:10' },
     ];
 
     classes.forEach((klass) => {
@@ -232,12 +236,14 @@ export function buildWorld(): World {
                     class_id: klass.id,
                     class_name: klass.name,
                     day,
+                    // The timetable reads one "time" string, not a pair.
+                    time: `${period.start} - ${period.end}`,
                     period: period.index,
-                    start: period.start,
-                    end: period.end,
                     subject,
                     teacher_id: teacher.id,
+                    teacher: teacher.name,
                     teacher_name: teacher.name,
+                    room: `Room ${101 + (pi % 6)}`,
                 });
             });
         });
@@ -245,15 +251,13 @@ export function buildWorld(): World {
 
     /* -------------------------------- marks ------------------------------- */
 
-    const CATEGORIES = ['Daily', 'Quiz', 'Monthly exam', 'Term exam'];
-
     students.forEach((student) => {
         // A believable student is good at some subjects and not others.
         const bias = between(-12, 14);
         SUBJECT_NAMES.slice(0, 6).forEach((subject) => {
             const base = Math.max(35, Math.min(98, between(55, 92) + bias));
             for (const category of CATEGORIES.slice(0, between(2, 4))) {
-                const total = category === 'Daily' ? 20 : category === 'Quiz' ? 25 : 100;
+                const total = category === 'يومي' ? 20 : category === 'اختبار قصير' ? 25 : 100;
                 const ratio = Math.max(0.3, Math.min(1, (base + between(-8, 8)) / 100));
                 grades.push({
                     id: `gr-${student.uid}-${subject}-${category}`,
@@ -262,7 +266,7 @@ export function buildWorld(): World {
                     class_id: student.class_id,
                     subject,
                     category,
-                    semester: 'First term',
+                    semester: SEMESTER,
                     score: Math.round(total * ratio),
                     total,
                 });
@@ -302,21 +306,21 @@ export function buildWorld(): World {
 
     /* ------------------------------- conduct ------------------------------- */
 
-    const POSITIVE = [
-        ['Outstanding participation', 'Discipline'],
-        ['Helped a classmate catch up', 'Citizenship'],
-        ['Top mark in the monthly exam', 'Academic'],
-        ['Represented the school at the science fair', 'Citizenship'],
+    const POSITIVE: [string, string][] = [
+        ['Outstanding participation in class', 'مشاركة فعالة'],
+        ['Helped a classmate catch up', 'مساعدة الزملاء'],
+        ['Top mark in the monthly exam', 'تفوق دراسي'],
+        ['Represented the school at the science fair', 'مشاركة فعالة'],
     ];
-    const NEGATIVE = [
-        ['Late to the first lesson', 'Attendance'],
-        ['Homework not submitted', 'Academic'],
-        ['Talking during the lesson', 'Discipline'],
-        ['Phone used in class', 'Discipline'],
+    const NEGATIVE: [string, string][] = [
+        ['Late to the first lesson', 'تأخر متكرر'],
+        ['Homework not submitted', 'عدم أداء الواجبات'],
+        ['Talking during the lesson', 'إزعاج داخل الصف'],
+        ['Phone used in class', 'مخالفة سلوكية'],
     ];
 
     students.forEach((student) => {
-        const count = between(0, 3);
+        const count = between(1, 3);
         for (let i = 0; i < count; i++) {
             const positive = rand() > 0.4;
             const [title, category] = pick(positive ? POSITIVE : NEGATIVE);
@@ -342,8 +346,8 @@ export function buildWorld(): World {
 
     students.forEach((student) => {
         const terms = [
-            { title: 'First instalment', due: shift(-between(5, 30)), amount: 500000 },
-            { title: 'Second instalment', due: shift(between(5, 25)), amount: 500000 },
+            { title: 'القسط الأول', due: shift(-between(5, 30)), amount: 500000 },
+            { title: 'القسط الثاني', due: shift(between(5, 25)), amount: 500000 },
         ];
 
         terms.forEach((term, i) => {
@@ -362,7 +366,7 @@ export function buildWorld(): World {
                 class_id: student.class_id,
                 class_name: student.class_name,
                 title: term.title,
-                category: 'Tuition',
+                category: 'قسط دراسي',
                 amount: term.amount,
                 discount: 0,
                 paid_amount: paid,
@@ -370,7 +374,7 @@ export function buildWorld(): World {
                 remaining: term.amount - paid,
                 currency: 'IQD',
                 due_date: term.due,
-                term: i === 0 ? 'First term' : 'Second term',
+                term: i === 0 ? 'الفصل الأول' : 'الفصل الثاني',
                 academic_year: '2026/2027',
                 status,
                 createdAt: stamp(between(600000, 3000000)),
@@ -384,7 +388,7 @@ export function buildWorld(): World {
                     student_id: student.id,
                     student_name: student.name,
                     amount: paid,
-                    method: pick(['Cash', 'Transfer']),
+                    method: pick(['نقداً', 'تحويل']),
                     paid_at: term.due,
                     receipt_no: `R-${student.uid}${i}`,
                     recorded_by_name: 'Huda Nouri',
@@ -444,7 +448,7 @@ export function buildWorld(): World {
                 class_id: klass.id,
                 class_name: klass.name,
                 subject,
-                kind: pick(['Monthly exam', 'Quiz', 'Term exam']),
+                kind: pick(['امتحان شهري', 'اختبار قصير', 'امتحان فصلي']),
                 date: shift(between(3, 20)),
                 time: pick(['09:00', '10:45', '11:35']),
                 createdAt: stamp(between(3600, 200000)),
@@ -465,7 +469,7 @@ export function buildWorld(): World {
             return_time: '13:40',
             stops: ['Al-Andalus square', 'Palestine street', 'Zayouna'],
             status: 'on_route',
-            status_text: 'On the way',
+            status_text: 'في الطريق',
         },
         {
             id: 'b2',
@@ -477,7 +481,7 @@ export function buildWorld(): World {
             return_time: '13:45',
             stops: ['Al-Mansour', 'Yarmouk', 'Al-Jamia'],
             status: 'at_school',
-            status_text: 'At school',
+            status_text: 'وصل المدرسة',
         },
     ];
 
@@ -543,6 +547,84 @@ export function buildWorld(): World {
         sender_role: 'admin', body: 'A reminder that the second instalment is due this month.',
         createdAt: stamp(86400),
     });
+
+    /*
+     * A few more, so whichever role a visitor picks the inbox has something in
+     * it. An empty messages screen reads as a feature that does not work rather
+     * than as a quiet week.
+     */
+    const englishTeacher = teachers.find((t) => t.subjects[0] === 'English')!;
+    const secondChild = students.find((s) => firstGuardian.student_ids.includes(s.id) && s.id !== firstChild.id);
+
+    const thread = (
+        id: string,
+        a: Row,
+        b: Row,
+        about: Row | undefined,
+        lines: [Row, string, number][],
+        unreadFor?: string
+    ) => {
+        const last = lines[lines.length - 1];
+        conversations.push({
+            id,
+            pair_key: id,
+            participant_ids: [a.id, b.id],
+            participants: {
+                [a.id]: { name: a.name, role: a.role },
+                [b.id]: { name: b.name, role: b.role },
+            },
+            student_id: about?.id || null,
+            student_name: about?.name || null,
+            last_message: last[1],
+            last_at: stamp(last[2]),
+            unread: unreadFor ? { [unreadFor]: 1 } : {},
+        });
+
+        lines.forEach(([sender, body, ago], i) => {
+            messages.push({
+                id: id + '-m' + i,
+                conversation_id: id,
+                sender_id: sender.id,
+                sender_name: sender.name,
+                sender_role: sender.role,
+                body,
+                createdAt: stamp(ago),
+            });
+        });
+    };
+
+    if (secondChild) {
+        thread('cv3', firstGuardian, englishTeacher, secondChild, [
+            [firstGuardian, `Good evening. Has ${secondChild.name.split(' ')[0]} handed in the writing task?`, 200000],
+            [englishTeacher, 'Not yet — the deadline is Thursday, so there is still time.', 180000],
+            [firstGuardian, 'Understood, thank you. I will make sure it is done.', 172000],
+        ]);
+    }
+
+    const scienceTeacher = teachers.find((t) => t.subjects[0] === 'Chemistry')!;
+    const secondGuardian = guardians[3];
+    const secondGuardianChild = students.find((s) => s.id === secondGuardian?.student_ids[0]);
+
+    if (secondGuardian && secondGuardianChild) {
+        thread('cv4', scienceTeacher, secondGuardian, secondGuardianChild, [
+            [
+                scienceTeacher,
+                `${secondGuardianChild.name.split(' ')[0]} missed the lab session on Tuesday. Is everything alright?`,
+                150000,
+            ],
+            [secondGuardian, 'He had a doctor\'s appointment. I sent a note with him.', 140000],
+            [scienceTeacher, 'Thank you — I have marked it as excused.', 138000],
+        ], scienceTeacher.id);
+    }
+
+    thread('cv5', teachers[0], { id: 'u-admin', name: 'Adam Rashid', role: 'admin' } as Row, undefined, [
+        [teachers[0], 'The projector in Room 103 is still not working.', 260000],
+        [
+            { id: 'u-admin', name: 'Adam Rashid', role: 'admin' } as Row,
+            'Maintenance are coming on Sunday morning. Use Room 105 until then.',
+            250000,
+        ],
+    ]);
 
     /* ----------------------------- notifications ---------------------------- */
 
@@ -625,7 +707,7 @@ export function buildWorld(): World {
         phone: `077${between(1000000, 9999999)}`,
         guardian_name: name(),
         guardian_phone: `077${between(1000000, 9999999)}`,
-        guardian_relation: 'Father',
+        guardian_relation: 'الأب',
         previous_school: 'Al-Noor Primary',
         address: 'Al-Mansour district',
         status: 'pending',

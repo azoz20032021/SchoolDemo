@@ -4,7 +4,7 @@ import { Bell, Check, CheckCheck, X } from 'lucide-react';
 import { UserData } from '../../types';
 import { api, formatDateTime } from '../../lib/api';
 import { roleLabel } from '../../lib/roles';
-import { t } from '../../i18n';
+import { localeOf, t } from '../../i18n';
 
 interface DashboardHeaderProps {
     user: UserData;
@@ -121,7 +121,7 @@ export const DashboardHeader: React.FC<DashboardHeaderProps> = ({ user }) => {
 
     return (
         <header className="sticky top-0 z-[100] print:hidden">
-            <div className="relative overflow-hidden bg-brand-900 text-white rounded-b-[1.75rem] shadow-[0_10px_30px_-14px_rgba(7,21,83,0.8)]">
+            <div className="relative overflow-hidden bg-brand-900 text-white rounded-b-[1.75rem] lg:rounded-none lg:border-b lg:border-white/10 shadow-[0_10px_30px_-14px_rgba(7,21,83,0.8)] lg:shadow-none">
                 {/* The crest's blue, lit rather than flat. */}
                 <div className="absolute -left-16 -top-20 w-56 h-56 bg-brand-500/50 rounded-full blur-3xl" />
                 <div className="absolute right-1/4 -top-24 w-52 h-52 bg-brand-400/30 rounded-full blur-3xl" />
@@ -137,13 +137,26 @@ export const DashboardHeader: React.FC<DashboardHeaderProps> = ({ user }) => {
                             />
                         </div>
                         <div className="min-w-0">
-                            <h2 className="text-[13px] font-black leading-tight truncate">{user.name}</h2>
-                            <p className="text-[10px] font-bold text-gold-300 mt-0.5 truncate">
+                            <h2 className="text-[13px] lg:text-base font-black leading-tight truncate">
+                                {user.name}
+                            </h2>
+                            <p className="text-[10px] lg:text-[11px] font-bold text-gold-300 mt-0.5 truncate">
                                 {t(roleLabel(user.role))}
-                                <span className="text-brand-200"> · {t('ثانوية المعالي الأهلية')}</span>
+                                {/* The sidebar already says which school this is. */}
+                                <span className="text-brand-200 lg:hidden"> · {t('ثانوية المعالي الأهلية')}</span>
                             </p>
                         </div>
                     </div>
+
+                    {/*
+                      * The date fills the middle of a wide bar, which was empty,
+                      * and it is the thing every register and report is about.
+                      */}
+                    <p className="hidden lg:block text-[11px] font-bold text-brand-200 tabular shrink-0">
+                        {new Date().toLocaleDateString(localeOf(), {
+                            weekday: 'long', day: 'numeric', month: 'long', year: 'numeric',
+                        })}
+                    </p>
 
                     <div className="relative shrink-0">
                         <button

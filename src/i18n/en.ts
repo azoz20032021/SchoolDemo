@@ -1107,6 +1107,10 @@ export const en: Record<string, string> = {
   "مثال: بكالوريوس رياضيات": "e.g. BSc Mathematics",
   "المعلم": "Teacher",
   "المعلمون": "Teachers",
+
+  /* ------------------------------ conduct ------------------------------ */
+  "{count} ملاحظة إيجابية": "{count} positive",
+  "{count} ملاحظة سلبية": "{count} negative",
   "رقم الهاتف": "Phone number",
   "الرسوم": "Fees",
   "من": "of",
