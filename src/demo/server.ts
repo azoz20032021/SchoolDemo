@@ -306,7 +306,33 @@ const ROUTES: [RegExp, Handler][] = [
         return { upcoming };
     }],
     [/^\/api\/student\/([^/]+)\/bus$/, ({ parts }) => busFor(byId(world.users, parts[0])!)],
-    [/^\/api\/student\/([^/]+)\/finance$/, ({ parts }) => financeFor(parts[0])],
+    [/^\/api\/student\/([^/]+)\/finance$/, ({ parts }) => {
+        const finance = financeFor(parts[0]);
+        const overdue = finance.invoices.filter((i) => i.remaining > 0 && i.due_date && i.due_date < TODAY);
+
+        return {
+            summary: {
+                currency: 'IQD',
+                total_billed: finance.total_billed,
+                total_paid: finance.total_paid,
+                outstanding: finance.outstanding,
+                is_clear: finance.is_clear,
+                invoice_count: finance.invoices.length,
+                overdue_count: overdue.length,
+                overdue_amount: overdue.reduce((sum, i) => sum + i.remaining, 0),
+                next_due_date: finance.invoices
+                    .filter((i) => i.remaining > 0)
+                    .map((i) => i.due_date)
+                    .sort()[0] || null,
+            },
+            invoices: finance.invoices.sort((a, b) =>
+                String(b.due_date || '').localeCompare(String(a.due_date || ''))
+            ),
+            payments: world.payments
+                .filter((p) => p.student_id === parts[0])
+                .sort((a, b) => (b.createdAt?.seconds || 0) - (a.createdAt?.seconds || 0)),
+        };
+    }],
     [/^\/api\/student\/([^/]+)\/behavior$/, ({ parts }) => {
         const { notes, conduct_score } = behaviorFor(parts[0]);
         return {

@@ -346,8 +346,8 @@ export function buildWorld(): World {
 
     students.forEach((student) => {
         const terms = [
-            { title: 'القسط الأول', due: shift(-between(5, 30)), amount: 500000 },
-            { title: 'القسط الثاني', due: shift(between(5, 25)), amount: 500000 },
+            { title: 'First instalment', due: shift(-between(5, 30)), amount: 500000 },
+            { title: 'Second instalment', due: shift(between(5, 25)), amount: 500000 },
         ];
 
         terms.forEach((term, i) => {
@@ -366,7 +366,7 @@ export function buildWorld(): World {
                 class_id: student.class_id,
                 class_name: student.class_name,
                 title: term.title,
-                category: 'قسط دراسي',
+                category: 'Tuition',
                 amount: term.amount,
                 discount: 0,
                 paid_amount: paid,
@@ -388,7 +388,7 @@ export function buildWorld(): World {
                     student_id: student.id,
                     student_name: student.name,
                     amount: paid,
-                    method: pick(['نقداً', 'تحويل']),
+                    method: pick(['Cash', 'Bank transfer']),
                     paid_at: term.due,
                     receipt_no: `R-${student.uid}${i}`,
                     recorded_by_name: 'Huda Nouri',

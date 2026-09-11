@@ -57,15 +57,16 @@ export const StudentFinance: React.FC<{ user: UserData }> = ({ user }) => {
                     </h3>
                     <div className="mt-4 flex gap-2 flex-wrap">
                         <div className="bg-white/20 px-3 py-1 rounded-full text-[10px] font-bold">
-                            إجمالي الرسوم {formatMoney(summary.total_billed)}
+                            {t('إجمالي الرسوم')} {formatMoney(summary.total_billed)}
                         </div>
                         <div className="bg-white/20 px-3 py-1 rounded-full text-[10px] font-bold">
-                            المسدد {formatMoney(summary.total_paid)}
+                            {t('المسدد')} {formatMoney(summary.total_paid)}
                         </div>
                     </div>
                     {summary.overdue_count > 0 && (
                         <p className="mt-3 text-[11px] font-bold bg-white/25 inline-block px-3 py-1.5 rounded-xl">
-                            لديك {summary.overdue_count} سند متأخر بقيمة {formatMoney(summary.overdue_amount)}
+                            {t('لديك {count} سند متأخر بقيمة', { count: summary.overdue_count })}{' '}
+                            {formatMoney(summary.overdue_amount)}
                         </p>
                     )}
                 </div>
@@ -105,7 +106,7 @@ export const StudentFinance: React.FC<{ user: UserData }> = ({ user }) => {
                                             </div>
                                             <p className="text-[11px] text-slate-400 font-medium mt-0.5">
                                                 {inv.category}
-                                                {inv.due_date && ` · الاستحقاق ${inv.due_date}`}
+                                                {inv.due_date && ` · ${t('الاستحقاق')} ${inv.due_date}`}
                                             </p>
                                         </div>
                                         <div className="text-left shrink-0">
@@ -114,7 +115,7 @@ export const StudentFinance: React.FC<{ user: UserData }> = ({ user }) => {
                                             </p>
                                             {(inv.remaining ?? 0) > 0 && (
                                                 <p className="text-[10px] text-rose-500 font-bold">
-                                                    متبقي {formatMoney(inv.remaining)}
+                                                    {t('متبقي')} {formatMoney(inv.remaining)}
                                                 </p>
                                             )}
                                         </div>
